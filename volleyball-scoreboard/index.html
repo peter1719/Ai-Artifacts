@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>排球計分板</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="theme-color" content="#111111">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="計分板">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%; overflow: hidden; background: #111;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+    font-family: "Barlow Condensed", system-ui, sans-serif;
+  }
+  .board { display: flex; height: 100vh; height: 100dvh; }
+  .side {
+    flex: 1; position: relative; display: flex; align-items: center; justify-content: center;
+    touch-action: none; cursor: pointer; color: #fff; overflow: hidden;
+    transition: filter .12s;
+  }
+  #left  { background: #d62f2f; padding-left: env(safe-area-inset-left); }
+  #right { background: #2457c9; padding-right: env(safe-area-inset-right); }
+  .side.pressed { filter: brightness(1.12); }
+  .side.minus   { filter: brightness(.7); }
+  .score {
+    font-size: min(30vw, 78vh); line-height: 1; font-variant-numeric: tabular-nums;
+    text-shadow: 0 .03em .08em rgba(0,0,0,.25);
+    transition: transform .12s;
+  }
+  .side.bump .score { transform: scale(1.06); }
+  .side.drop .score { transform: translateY(.04em) scale(.94); }
+  .flash {
+    position: absolute; top: 12%; font-size: min(9vw, 16vh); opacity: 0; pointer-events: none;
+  }
+  .flash.show { animation: flash .6s ease-out; }
+  @keyframes flash { 0% { opacity: .9; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-30%); } }
+
+  /* 中央歸零按鈕 */
+  .center {
+    position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom));
+    transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 6px;
+    z-index: 5;
+  }
+  #reset {
+    position: relative; width: 64px; height: 64px; border-radius: 50%;
+    border: none; background: rgba(0,0,0,.55); color: #fff; touch-action: none;
+    font: 700 15px system-ui, sans-serif; letter-spacing: .05em;
+  }
+  #reset svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+  #reset circle { fill: none; stroke: #fff; stroke-width: 4; stroke-dasharray: 182; stroke-dashoffset: 182; }
+  #reset.holding circle { transition: stroke-dashoffset 1s linear; stroke-dashoffset: 0; }
+  .hint { color: rgba(255,255,255,.75); font: 12px system-ui, sans-serif; white-space: nowrap; }
+
+  #fs {
+    position: fixed; top: max(10px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,.35); color: #fff; border: none; border-radius: 16px;
+    padding: 6px 12px; font: 12px system-ui, sans-serif; z-index: 5;
+  }
+  .divider { position: fixed; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: rgba(255,255,255,.35); pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="board">
+  <div class="side" id="left"><span class="flash"></span><span class="score">0</span></div>
+  <div class="side" id="right"><span class="flash"></span><span class="score">0</span></div>
+</div>
+<div class="divider"></div>
+<button id="fs" type="button">全螢幕</button>
+<div class="center">
+  <button id="reset" type="button" aria-label="長按歸零">
+    <svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="29"/></svg>歸零
+  </button>
+  <div class="hint">點擊 +1 ・ 下滑或長按 −1</div>
+</div>
+
+<script>
+(() => {
+  const KEY = 'vb-score-v1';
+  let scores = [0, 0];
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY));
+    if (Array.isArray(saved) && saved.length === 2) scores = saved.map(n => Math.max(0, n | 0));
+  } catch (e) {}
+
+  const sides = [document.getElementById('left'), document.getElementById('right')];
+
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(scores)); } catch (e) {} }
+  function render() { sides.forEach((el, i) => el.querySelector('.score').textContent = scores[i]); }
+
+  function anim(el, cls, text) {
+    el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls);
+    setTimeout(() => el.classList.remove(cls), 150);
+    const f = el.querySelector('.flash');
+    f.textContent = text; f.classList.remove('show'); void f.offsetWidth; f.classList.add('show');
+  }
+
+  // 震動提示：+1 短震一下、−1 連震兩下、歸零長震
+  function buzz(pattern) { try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (e) {} }
+
+  function change(i, d) {
+    const next = Math.max(0, Math.min(99, scores[i] + d));
+    if (next === scores[i]) return;
+    scores[i] = next; render(); save();
+    buzz(d > 0 ? 30 : [30, 70, 30]);
+    anim(sides[i], d > 0 ? 'bump' : 'drop', d > 0 ? '+1' : '−1');
+  }
+
+  const SWIPE = 40, LONG = 600, MOVE_TOL = 12;
+
+  sides.forEach((el, i) => {
+    let start = null, timer = null, done = false;
+
+    el.addEventListener('pointerdown', e => {
+      el.setPointerCapture(e.pointerId);
+      start = { x: e.clientX, y: e.clientY }; done = false;
+      el.classList.add('pressed');
+      timer = setTimeout(() => {           // 長按扣分
+        done = true; el.classList.remove('pressed');
+        el.classList.add('minus'); setTimeout(() => el.classList.remove('minus'), 180);
+        change(i, -1);
+      }, LONG);
+    });
+
+    el.addEventListener('pointermove', e => {
+      if (!start || done) return;
+      const dx = e.clientX - start.x, dy = e.clientY - start.y;
+      if (Math.hypot(dx, dy) > MOVE_TOL) clearTimeout(timer);
+      if (dy > SWIPE && Math.abs(dy) > Math.abs(dx)) {   // 往下滑扣分
+        done = true; el.classList.remove('pressed');
+        change(i, -1);
+      }
+    });
+
+    const end = e => {
+      if (!start) return;
+      clearTimeout(timer); el.classList.remove('pressed');
+      if (!done && e.type === 'pointerup') {
+        const moved = Math.hypot(e.clientX - start.x, e.clientY - start.y);
+        if (moved < MOVE_TOL) change(i, +1);   // 點擊加分
+      }
+      start = null;
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+  });
+
+  // 長按 1 秒歸零
+  const resetBtn = document.getElementById('reset');
+  let rTimer = null;
+  const rStart = e => {
+    e.preventDefault();
+    resetBtn.classList.add('holding');
+    rTimer = setTimeout(() => {
+      scores = [0, 0]; render(); save();
+      buzz(200);
+      sides.forEach(el => anim(el, 'drop', '0'));
+      resetBtn.classList.remove('holding');
+    }, 1000);
+  };
+  const rEnd = () => { clearTimeout(rTimer); resetBtn.classList.remove('holding'); };
+  resetBtn.addEventListener('pointerdown', rStart);
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(t => resetBtn.addEventListener(t, rEnd));
+  resetBtn.addEventListener('contextmenu', e => e.preventDefault());
+  document.addEventListener('contextmenu', e => e.preventDefault());
+
+  // 保持螢幕不休眠
+  let wakeLock = null;
+  async function requestWake() {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+    } catch (e) {}
+  }
+  document.addEventListener('pointerdown', () => { if (!wakeLock) requestWake(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !wakeLock) requestWake();
+  });
+  requestWake();
+
+  // 全螢幕
+  const fsBtn = document.getElementById('fs');
+  // 已從主畫面以全螢幕開啟，或瀏覽器不支援（如 iPhone Safari）時隱藏按鈕
+  const standalone = matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches || navigator.standalone;
+  const d0 = document.documentElement;
+  if (standalone || !(d0.requestFullscreen || d0.webkitRequestFullscreen)) fsBtn.style.display = 'none';
+  fsBtn.addEventListener('click', async () => {
+    try {
+      const d = document.documentElement;
+      if (!document.fullscreenElement) {
+        await (d.requestFullscreen || d.webkitRequestFullscreen).call(d);
+        try { await screen.orientation.lock('landscape'); } catch (e) {}
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (e) { fsBtn.style.display = 'none'; }
+  });
+  document.addEventListener('fullscreenchange', () => {
+    fsBtn.textContent = document.fullscreenElement ? '離開全螢幕' : '全螢幕';
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
